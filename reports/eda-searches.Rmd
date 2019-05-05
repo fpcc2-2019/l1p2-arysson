@@ -18,66 +18,72 @@ options(scipen = 20)
 ```
 
 ```{r ETL}
-buscas = read_csv(here::here("data/search_data.csv"))
+searches = read_csv(here::here("data/search_data.csv"))
+sessions = read_csv(here::here("data/session_data.csv"))
 ```
 
-```{r}
-buscas %>% 
-    ggplot(aes(x = results)) + 
-    geom_histogram(binwidth = 5) 
-```
-
-Primeiramente, vamos derivar os dados **dia de início** e **dia de fim** de cada sessão. Em seguida, filtrar apenas as sessões cujo dia de início seja igual ao dia de fim, ou seja, as sessões que ocorreram completamente em um único dia. Isso vai ajudar a fazer análises baseadas em dias.
+Primeiramente, vamos definir uma função para extrair apenas os dias (datas) dos nossos campos de data, que por enquanto contam também com o timestamp.
 
 ```{r}
 get_day = function(date) {
     return(as.Date(date))
 }
-
-same_day_searches = buscas %>% 
-    mutate(session_start_day = get_day(session_start_date), session_end_day = get_day(session_start_date + session_length)) %>% 
-    filter(session_start_day == session_end_day) 
 ```
 
-A perda de dados não foi muito grande (redução de `r nrow(buscas)` para `r nrow(same_day_searches)` sessões), e ganhamos o benefício de poder fazer uma análise diária bem definida. Afinal, como avaliaríamos sessões que duram vários dias?
-
-A seguir vamos sumarizar os dados, calculando taxa de *clickthrough*, taxa de zero resultados e tamanho médio de sessão para cada dia, a fim de responder as perguntas a seguir.
+Em seguida filtrar as entidades (sejam **pesquisas** ou **sessões**) que acontecem completamente em um único dia.
 
 ```{r}
-daily_stats_total = same_day_searches %>% 
-    group_by(session_start_day) %>% 
-    rename(day = session_start_day) %>% 
-    summarize(clickthrough_rate = sum(!is.na(first_click)) / n(), zero_results_rate = sum(results == 0) / n(), session_length = mean(session_length)) %>% 
-    mutate(group = "total")
+searches_in_day = searches %>% 
+    mutate(search_start_date = get_day(search_start_date), search_end_date = get_day(search_end_date)) %>% 
+    filter(search_start_date == search_end_date)
 
-daily_stats_by_group = same_day_searches %>% 
-    group_by(session_start_day, group) %>% 
-    rename(day = session_start_day) %>% 
-    summarize(clickthrough_rate = sum(!is.na(first_click)) / n(), zero_results_rate = sum(results == 0) / n(), session_length = mean(session_length))
-
-daily_stats = bind_rows(daily_stats_by_group, daily_stats_total) %>% 
-    arrange(day, group)
+sessions_in_day = sessions %>% 
+    mutate(session_start_date = get_day(session_start_date), session_end_date = get_day(session_end_date)) %>% 
+    filter(session_start_date == session_end_date)
 ```
+
+
+A perda de dados não foi muito grande (redução de `r nrow(searches)` para `r nrow(searches_in_day)` pesquisas, e de `r nrow(sessions)` para `r nrow(sessions_in_day)` sessões), e ganhamos o benefício de poder fazer uma análise diária bem definida. Afinal, em que dia consideraríamos entidades que duram vários dias?
 
 ## 1. Qual é a taxa diária de *clickthrough* no geral? Como ela varia entre os grupos?
 
+Temos que por definição, taxa de *clickthrough* é a proporção de **sessões** nas quais o usuário clicou ao menos em um dos resultados mostrados. Então vamos calcular as métricas diárias de *clickthrough* e tamanho de sessão (útil para a pergunta 4).
+
 ```{r}
-daily_stats %>% 
+tmp_total = sessions_in_day %>% 
+    group_by(session_start_date) %>% 
+    rename(day = session_start_date) %>% 
+    summarize(clickthrough_rate = sum(!is.na(first_click)) / n(), session_length = mean(session_length)) %>% 
+    mutate(group = "total")
+
+tmp_by_group = sessions_in_day %>% 
+    group_by(session_start_date, group) %>% 
+    rename(day = session_start_date) %>% 
+    summarize(clickthrough_rate = sum(!is.na(first_click)) / n(), session_length = mean(session_length))
+
+session_stats = bind_rows(tmp_total, tmp_by_group) %>% 
+    arrange(day, group)
+```
+
+Vamos plotar o gráfico de linhas de taxa de *clickthrough* por dia, para os groups A, B e total.
+
+```{r}
+session_stats %>% 
     select(day, group, clickthrough_rate) %>% 
     ggplot(aes(x = day, y = clickthrough_rate, color = group)) +
     geom_line()
 ```
 
-O gráfico acima mostra que, em geral, a taxa de *clickthrough* varia entre 23% e 26%. Porém, a diferença entre os grupos é evidente. No A, essa taxa oscila entre 27% e 30%, e no B, entre 12% e 17%. 
+O gráfico acima mostra que, em geral, a taxa de *clickthrough* varia entre 35% e 40%. Porém, a diferença entre os grupos é evidente. No A, essa taxa oscila entre 65% e 70%, e no B, entre 13% e 20%. 
 
 ## 2. Quais resultados as pessoas tendem a tentar primeiro? Como isso muda ao longo dos dias?
 
-Vamos visualizar um boxplot dos primeiros cliques para cada dia.
+Vamos visualizar um boxplot dos primeiros cliques para cada dia, para as **pesquisas**.
 
 ```{r}
-same_day_searches %>% 
-    select(session_start_day, first_click, group) %>% 
-    ggplot(aes(x = as.factor(session_start_day), y = first_click)) + 
+searches_in_day %>% 
+    select(search_start_date, first_click, group) %>% 
+    ggplot(aes(x = as.factor(search_start_date), y = first_click)) + 
     geom_boxplot()
 ```
 
@@ -86,56 +92,76 @@ Os pontos ficaram tão concentrados perto do 1 que os quartis (exceto o 4º, obv
 Vamos analisar com um gráfico de densidade, na verdade, um para cada dia, com cores para diferenciar.
 
 ```{r}
-same_day_searches %>% 
-    select(session_start_day, first_click, group) %>% 
-    ggplot(aes(color = as.factor(session_start_day), x = first_click)) + 
+searches_in_day %>% 
+    select(search_start_date, first_click, group) %>% 
+    ggplot(aes(color = as.factor(search_start_date), x = first_click)) + 
     geom_density()
 ```
 
-O gráfico de densidade mostra uma distribuição extremamente concentrada à esquerda, com uma cauda muito longo e muito fina à direita. Não dá para perceber distinção alguma entre os gráficos dos dias.
+O gráfico de densidade mostra uma distribuição extremamente concentrada à esquerda, com uma cauda muito longa e muito fina à direita. Não dá para perceber distinção alguma entre os gráficos dos dias.
 
 Vamos usar uma escala logarítmica para o primeiro clique, a fim de ver se conseguimos observar melhor.
 
 ```{r}
-same_day_searches %>% 
-    select(session_start_day, first_click, group) %>% 
-    ggplot(aes(color = as.factor(session_start_day), x = log(first_click))) + 
+searches_in_day %>% 
+    select(search_start_date, first_click, group) %>% 
+    ggplot(aes(color = as.factor(search_start_date), x = log(first_click))) + 
     geom_density()
 ```
 
-Agora dá para perceber melhor o gráfico, no sentido de ele não se confundir com os eixos. Ainda assim, as distribuições entre os dias são bastante similares, de forma que é praticamente impossível distinguir todos os gráficos. E vale notar que mesmo utilizando escala logarítmica, o gráfico apresenta uma grande concentração à esquerda e uma cauda longa à direita. Porém, é possível perceber uma sequência de modas (umas 3 ou 4 visíveis), que vão diminuindo de amplitude e se confundindo com o próprio gráfico quando se vai para a direita.
+Agora dá para perceber melhor o gráfico, no sentido de ele não se confundir com os eixos. Ainda assim, as distribuições entre os dias são bastante similares, de forma que é praticamente impossível distinguir todos as curvas. E vale notar que mesmo utilizando escala logarítmica, o gráfico apresenta uma grande concentração à esquerda e uma cauda longa à direita. Também é possível perceber uma sequência de modas (umas 3 ou 4 visíveis), que vão diminuindo de amplitude e se confundindo com o próprio eixo horizontal quando se vai para a direita.
 
 Por fim, analisando um gráfico de boxplots em escala logarítmica...
 
 ```{r}
-same_day_searches %>% 
-    select(session_start_day, first_click, group) %>% 
-    ggplot(aes(x = as.factor(session_start_day), y = log(first_click))) + 
+searches_in_day %>% 
+    select(search_start_date, first_click, group) %>% 
+    ggplot(aes(x = as.factor(search_start_date), y = log(first_click))) + 
     geom_boxplot()
 ```
 
 Chegamos à mesma conclusão: os gráficos para cada dia são muito semelhantes, com pequenas diferenças apenas ao nível dos valores extremos. As pessoas em sua maioria tendem a visitar a primeira página primeiro.
 
-## 3. Qual é a taxa diário de zero resultados, no geral? Como isso varia entre os grupos?
+## 3. Qual é a taxa diária de zero resultados, no geral? Como isso varia entre os grupos?
+
+Temos que, por definição, a taxa de zero resultados é dada por pesquisa. Assim, vamos sumarizar esse dado, por dia e por grupo, a partir dos dados de pesquisas.
 
 ```{r}
-daily_stats %>% 
+tmp_total = searches_in_day %>% 
+    group_by(search_start_date) %>% 
+    rename(day = search_start_date) %>% 
+    summarize(zero_results_rate = sum(results == 0) / n()) %>% 
+    mutate(group = "total")
+
+tmp_by_group = searches_in_day %>% 
+    group_by(search_start_date, group) %>% 
+    rename(day = search_start_date) %>% 
+    summarize(zero_results_rate = sum(results == 0) / n())
+
+search_stats = bind_rows(tmp_total, tmp_by_group) %>% 
+    arrange(day, group)
+```
+
+E agora plotando o gráfico de linhas equivalente ao da primeira questão:
+
+```{r}
+search_stats %>% 
     select(day, group, zero_results_rate) %>% 
     ggplot(aes(x = day, y = zero_results_rate, color = group)) +
     geom_line()
 ```
 
-A taxa apresenta variação entre os dias. No geral, oscila entre 17.5% e 19.5%, e semelhante à taxa do grupo B. Quanto ao grupo A, entre os dias 05 e 07, a taxa de zero resultados foi significativamente mais elevada.
+A taxa apresenta grande variação entre os dias. No geral (total), oscila entre 17.5% e 19.5%, e é mais semelhante à taxa do grupo A. Quanto ao grupo B, entre os dias 05 e 07, a taxa de zero resultados foi significativamente mais elevada.
 
 ## 4. Seja a duração da sessão aproximadamente o tempo entre o primeiro e o último evento da sessão. Escolha uma variável do conjunto de dados e descreva seu relacionamento com a duração de sessão. Visualise o relacionamento.
 
 Vamos ver como a duração de sessão varia de acordo com o dia e o grupo. Será interessante comparar os grupos, pois o experimento como um todo visa justamente escolher a configuração melhor, A ou B.
 
 ```{r}
-daily_stats %>% 
+session_stats %>% 
     select(day, group, session_length) %>% 
     ggplot(aes(x = day, y = session_length, color = group)) +
     geom_line()
 ```
 
-Claramente a duração das sessões do grupo B é significativamente menor do que as do grupo A, em todos os dias estudados. Isso pode ser um indício de que os usuários não acharam a configuração B tão interessante, preferindo a A.
+Claramente a duração das sessões do grupo B é significativamente menor do que as do grupo A, em todos os dias estudados Essa informação, junto com a da primeira e da terceira questão, é um indício de que os usuários não acharam a configuração B tão interessante, preferindo a A.

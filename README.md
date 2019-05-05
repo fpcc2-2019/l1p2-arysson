@@ -38,4 +38,4 @@ Existem 9 variáveis nos dados sendo elas:
 R, com os pacotes `tidyverse`, `lubridate` e `here`.
 
 ## Relatório
-O relatório final se encontra aqui: http://rpubs.com/arysson/492796
+O relatório final se encontra aqui: http://rpubs.com/arysson/493357
